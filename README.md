@@ -6,3 +6,7 @@ pip install pre-commit<br>
 git clone 진행한 directory로 이동<br>
 pre-commit install<br>
 코드 정상 실행된 경우 git add, commit, push 진행
+
+
+## argparse 추가 내역  
+- python train.py --wandb_project 이름 --wandb_name 이름
