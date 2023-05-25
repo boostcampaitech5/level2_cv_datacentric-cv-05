@@ -35,7 +35,7 @@ def parse_args():
     parser.add_argument(
         "--data_dir",
         type=str,
-        default=os.environ.get("SM_CHANNEL_TRAIN", "../data/medical"),
+        default=os.environ.get("SM_CHANNEL_TRAIN", "/opt/ml/input/data/medical"),
     )
     parser.add_argument(
         "--model_dir",
@@ -57,6 +57,13 @@ def parse_args():
         type=list,
         default=["masked", "excluded-region", "maintable", "stamp"],
     )
+    # 추가
+    parser.add_argument("--my_opt", type=str, default="Adam")
+    parser.add_argument("--my_sched", type=str, default="MultiStepLR")
+    parser.add_argument("--T_max", type=int, default=50)  # CosineAnnealingLR
+    parser.add_argument("--factor", type=int, default=0.5)  # ReduceLROnPlateau
+    parser.add_argument("--patience", type=int, default=10)  # ReduceLROnPlateau
+    parser.add_argument("--milestones", type=list, default=[75])  # MultiStepLR
 
     parser.add_argument("--wandb_project", type=str, default="project")
     parser.add_argument("--wandb_name", type=str, default="name")
@@ -85,6 +92,12 @@ def do_training(
     wandb_project,
     wandb_name,
     seed,
+    my_opt,
+    my_sched,
+    T_max,
+    factor,
+    patience,
+    milestones,
 ):
     seed_everything(seed)
     wandb.init(
@@ -108,10 +121,21 @@ def do_training(
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = EAST()
     model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = lr_scheduler.MultiStepLR(
-        optimizer, milestones=[max_epoch // 2], gamma=0.1
-    )
+    # optimizer = torch.optim.my_optimizer(model.parameters(), lr=learning_rate)
+    optimizer = getattr(torch.optim, my_opt)(model.parameters(), lr=learning_rate)
+    # scheduler = lr_scheduler.my_scheduler(optimizer, milestones=[max_epoch // 2], gamma=0.1)
+    if my_sched == "CosineAnnealingLR":
+        scheduler = getattr(lr_scheduler, my_sched)(
+            optimizer, T_max=T_max, eta_min=0, last_epoch=-1
+        )
+    elif my_sched == "ReduceLROnPlateau":
+        scheduler = getattr(lr_scheduler, my_sched)(
+            optimizer, factor=factor, patience=patience, eps=1e-08
+        )
+    else:
+        scheduler = getattr(lr_scheduler, my_sched)(
+            optimizer, milestones=milestones, gamma=0.2
+        )
 
     model.train()
     for epoch in range(max_epoch):
