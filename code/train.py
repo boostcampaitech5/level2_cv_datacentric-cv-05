@@ -60,7 +60,6 @@ def parse_args():
     # 추가
     parser.add_argument("--my_opt", type=str, default="Adam")
     parser.add_argument("--my_sched", type=str, default="MultiStepLR")
-    parser.add_argument("--T_max", type=int, default=50)  # CosineAnnealingLR
     parser.add_argument("--factor", type=int, default=0.5)  # ReduceLROnPlateau
     parser.add_argument("--patience", type=int, default=10)  # ReduceLROnPlateau
     parser.add_argument("--milestones", type=list, default=[75])  # MultiStepLR
@@ -94,7 +93,6 @@ def do_training(
     seed,
     my_opt,
     my_sched,
-    T_max,
     factor,
     patience,
     milestones,
@@ -126,7 +124,7 @@ def do_training(
     # scheduler = lr_scheduler.my_scheduler(optimizer, milestones=[max_epoch // 2], gamma=0.1)
     if my_sched == "CosineAnnealingLR":
         scheduler = getattr(lr_scheduler, my_sched)(
-            optimizer, T_max=T_max, eta_min=0, last_epoch=-1
+            optimizer, T_max=max_epoch // 10, eta_min=0, last_epoch=-1
         )
     elif my_sched == "ReduceLROnPlateau":
         scheduler = getattr(lr_scheduler, my_sched)(
