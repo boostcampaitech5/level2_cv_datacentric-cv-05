@@ -23,5 +23,11 @@ pre-commit install<br>
 
 --------------
 
-## argparse 추가 내역  
-- python train.py --wandb_project 이름 --wandb_name 이름
+## train.py argparse 추가 내역  
+- --wandb_project : wandb project 이름
+- --wandb_name : wandb project
+- --my_opt : optimizer 선택 <Adam(default), SGD, RMSprop, Adagrad, AdamW>
+- --my_sched : scheduler 선택 <MultiStepLR(default), CosineAnnealingLR, ReduceLROnPlateau>
+- --factor : 학습률 조절에 사용, new lr = lr * factor로 구한다
+- --patience : 학습률 조절 시점 설정에 사용, ReduceLROnPlateau scheduler사용 중 loss값의 update가 patience만큼 없으면 lr 개선
+- --milestones : MultiStepLR scheduler를 사용할 때 학습률 변경 지점을 list 형식으로 대입
