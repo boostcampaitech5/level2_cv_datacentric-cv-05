@@ -35,7 +35,7 @@ def parse_args():
     parser.add_argument(
         "--data_dir",
         type=str,
-        default=os.environ.get("SM_CHANNEL_TRAIN", "../data/medical"),
+        default=os.environ.get("SM_CHANNEL_TRAIN", "/opt/ml/input/data/medical"),
     )
     parser.add_argument(
         "--model_dir",
