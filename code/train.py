@@ -14,9 +14,20 @@ from tqdm import tqdm
 from east_dataset import EASTDataset
 from dataset import SceneTextDataset
 from model import EAST
+
 import wandb
-import numpy as np
+
 import random
+import numpy as np
+
+def seed_everything(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)  
+    torch.backends.cudnn.deterministic = True  
+    torch.backends.cudnn.benchmark = False  
 
 def parse_args():
     parser = ArgumentParser()
@@ -24,7 +35,6 @@ def parse_args():
     # Conventional args
     parser.add_argument('--data_dir', type=str,
                         default=os.environ.get('SM_CHANNEL_TRAIN', "/opt/ml/input/data/medical"))
-    
     parser.add_argument('--model_dir', type=str, default=os.environ.get('SM_MODEL_DIR',
                                                                         'trained_models'))
 
@@ -39,11 +49,12 @@ def parse_args():
     parser.add_argument('--save_interval', type=int, default=5)
     parser.add_argument('--ignore_tags', type=list, default=['masked', 'excluded-region', 'maintable', 'stamp'])
 
-    parser.add_argument("--wandb_project", type=str, default="project")
-    parser.add_argument("--wandb_name", type=str, default="name")
+    parser.add_argument('--wandb_project',type=str, default='project')
+    parser.add_argument('--wandb_name', type=str,default='name')
 
-    parser.add_argument("--seed", type=int, default=5)
+    parser.add_argument('--seed',type=int, default=5)
 
+    parser.add_argument('--valid',type=bool, default=False)
     args = parser.parse_args()
 
     if args.input_size % 32 != 0:
@@ -51,58 +62,61 @@ def parse_args():
 
     return args
 
-def seed_everything(seed):
-    random.seed(seed)
-    np.random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
 
 def do_training(data_dir, model_dir, device, image_size, input_size, num_workers, batch_size,
-                learning_rate, max_epoch, save_interval, ignore_tags, wandb_project, wandb_name, seed):
+                learning_rate, max_epoch, save_interval, ignore_tags, wandb_project, wandb_name, seed, valid):
     
     seed_everything(seed)
-    
-    wandb.init(
-        project=wandb_project, entity="boostcamp-cv5-dc", name=wandb_name
-    )
+    wandb.init(project=args.wandb_project, entity="boostcamp-cv5-dc", name=args.wandb_name)
     wandb.config.update(args)
 
-
-    dataset = SceneTextDataset(
+    train_dataset = SceneTextDataset(
         data_dir,
-        split='train',
+        split='train_fold2',
         image_size=image_size,
         crop_size=input_size,
         ignore_tags=ignore_tags
     )
-    dataset = EASTDataset(dataset)
-    num_batches = math.ceil(len(dataset) / batch_size)
+    train_dataset = EASTDataset(train_dataset)
+    train_num_batches = math.ceil(len(train_dataset) / batch_size)
     train_loader = DataLoader(
-        dataset,
+        train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers
     )
 
+    if valid:
+        valid_dataset = SceneTextDataset(
+            data_dir,
+            split='val_fold2',
+            image_size=image_size,
+            crop_size=input_size,
+            ignore_tags=ignore_tags
+        )
+        valid_dataset = EASTDataset(valid_dataset)
+        valid_loader = DataLoader(
+        valid_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers
+        )
+        valid_num_batches = math.ceil(len(valid_dataset)/batch_size)
+    
+   
+
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = EAST()
     model.to(device)
-    wandb.watch(model)
-
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = lr_scheduler.MultiStepLR(
-        optimizer, milestones=[max_epoch // 2], gamma=0.1
-    )
+    scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[max_epoch // 2], gamma=0.1)
+
+    best_val_epoch_loss = 100
 
     model.train()
-
     for epoch in range(max_epoch):
         epoch_loss, epoch_start = 0, time.time()
-        with tqdm(total=num_batches) as pbar:
+        with tqdm(total=train_num_batches) as pbar:
             for img, gt_score_map, gt_geo_map, roi_mask in train_loader:
                 pbar.set_description('[Epoch {}]'.format(epoch + 1))
 
@@ -119,28 +133,72 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                     'Cls loss': extra_info['cls_loss'], 'Angle loss': extra_info['angle_loss'],
                     'IoU loss': extra_info['iou_loss']
                 }
+
+                wandb.log({ 'Train_cls_loss': extra_info['cls_loss'],
+                           'Train_angle_loss': extra_info['angle_loss'],
+                           'Train_iou_loss': extra_info['iou_loss'],
+                           "lr":scheduler.optimizer.param_groups[0]['lr'],
+                           })
+
                 pbar.set_postfix(val_dict)
-                wandb.log(
-                    {
-                        "cls_loss": extra_info["cls_loss"],
-                        "angle_loss": extra_info["angle_loss"],
-                        "iou_loss": extra_info["iou_loss"],
-                        "lr":scheduler.optimizer.param_groups[0]['lr'],
-                    }
-                )
-        scheduler.step()
-        
-        
-
+        #전체 train loss
         print('Mean loss: {:.4f} | Elapsed time: {}'.format(
-            epoch_loss / num_batches, timedelta(seconds=time.time() - epoch_start)))
+            epoch_loss / train_num_batches, timedelta(seconds=time.time() - epoch_start)))
+        
+        if valid:
+            with torch.no_grad():
+                model.eval()
+                val_epoch_loss, epoch_start = 0, time.time()
+                val_epoch_cls_loss, val_epoch_angle_loss, val_epoch_iou_loss =0., 0., 0.
+                with tqdm(total=valid_num_batches) as pbar:
+                    for img, gt_score_map, gt_geo_map, roi_mask in valid_loader:
+                        pbar.set_description('[Epoch {}]'.format(epoch + 1))
+                        loss, extra_info = model.train_step(img, gt_score_map, gt_geo_map, roi_mask)
 
-        if (epoch + 1) % save_interval == 0:
-            if not osp.exists(model_dir):
-                os.makedirs(model_dir)
+                        loss_val = loss.item()
+                        val_epoch_loss += loss_val
 
-            ckpt_fpath = osp.join(model_dir, 'latest.pth')
-            torch.save(model.state_dict(), ckpt_fpath)
+                        val_epoch_cls_loss += extra_info['cls_loss']
+                        val_epoch_angle_loss += extra_info['angle_loss']
+                        val_epoch_iou_loss += extra_info['iou_loss']
+
+                        pbar.update(1)
+                        val_dict = {
+                            'Cls loss': extra_info['cls_loss'], 'Angle loss': extra_info['angle_loss'],
+                            'IoU loss': extra_info['iou_loss']
+                        }
+                        pbar.set_postfix(val_dict)
+
+                val_epoch_loss /= valid_num_batches
+                val_epoch_cls_loss /= valid_num_batches
+                val_epoch_angle_loss /= valid_num_batches
+                val_epoch_iou_loss /= valid_num_batches
+            
+                wandb.log({'val_epoch_loss':val_epoch_loss, 
+                        'val_cls_loss': val_epoch_cls_loss,
+                            'val_angle_loss': val_epoch_angle_loss,
+                            'val_iou_loss': val_epoch_iou_loss,
+                            })
+                # 전체 val loss
+                print('Mean loss: {:.4f} | Elapsed time: {}'.format(
+                val_epoch_loss, timedelta(seconds=time.time() - epoch_start)))
+
+                if val_epoch_loss < best_val_epoch_loss:
+                    best_val_epoch_loss = val_epoch_loss
+                    if not osp.exists(model_dir+'/'+wandb_name):
+                        os.makedirs(model_dir+'/'+wandb_name)
+                    ckpt_fpath = osp.join(model_dir+'/'+wandb_name, f'best_val_loss.pth')
+                    torch.save(model.state_dict(), ckpt_fpath)
+                    print( f"Best val loss at epoch {epoch+1}! Saving the model to {ckpt_fpath}..." )
+
+        scheduler.step()
+
+        # if (epoch + 1) % save_interval == 0:
+        #     if not osp.exists(model_dir):
+        #         os.makedirs(model_dir)
+
+        #     ckpt_fpath = osp.join(model_dir, 'latest.pth')
+        #     torch.save(model.state_dict(), ckpt_fpath)
 
 
 def main(args):
@@ -148,5 +206,6 @@ def main(args):
 
 
 if __name__ == '__main__':
+    
     args = parse_args()
     main(args)
