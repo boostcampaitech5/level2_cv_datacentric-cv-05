@@ -9,6 +9,7 @@ import cv2
 from torch import cuda
 from model import EAST
 from tqdm import tqdm
+from deteval import calc_deteval_metrics
 
 from detect import detect
 
@@ -60,6 +61,41 @@ def do_inference(model, ckpt_fpath, data_dir, input_size, batch_size, split='tes
         ufo_result['images'][image_fname] = dict(words=words_info)
 
     return ufo_result
+
+def do_inference_for_val(model, input_size, split='test', data_dir = '/opt/ml/input/data/medical', val_json_fname = 'val_fold2.json'):
+
+    model.eval()
+
+    with open(osp.join(data_dir, "ufo", val_json_fname)) as f:
+        anno = json.load(f)
+
+    image_fnames = sorted(anno["images"].keys())
+    image_dir = osp.join(data_dir, "img", "train")
+
+    calc_f1 = []
+    calc_precision = []
+    calc_recall = []
+    for image_fname in image_fnames:
+        image = []
+        image_fpath = osp.join(image_dir, image_fname)
+        image.append(cv2.imread(image_fpath)[:, :, ::-1])
+        pred_bboxes = detect(model, image, input_size)
+        pred_bboxes_dict = {idx: bbox.tolist() for idx, bbox in enumerate(pred_bboxes)}
+        gt_bboxes_bbox_keys = anno['images'][image_fname]['words'].keys()
+        gt_bboxes_dict = {}
+        for i in gt_bboxes_bbox_keys :
+            gt_bboxes_dict[i] = anno['images'][image_fname]['words'][i]['points']
+        cal = calc_deteval_metrics(pred_bboxes_dict, gt_bboxes_dict, transcriptions_dict=None,
+                         eval_hparams=None, bbox_format='rect', verbose=False)
+        calc_f1.append(cal['total']['hmean'])
+        calc_precision.append(cal['total']['precision'])
+        calc_recall.append(cal['total']['recall'])
+    mean_f1 = sum(calc_f1) / len(calc_f1)
+    mean_precision = sum(calc_precision) / len(calc_precision)
+    mean_recall = sum(calc_recall) / len(calc_recall)
+
+
+    return (mean_recall, mean_precision, mean_f1)
 
 
 def main(args):

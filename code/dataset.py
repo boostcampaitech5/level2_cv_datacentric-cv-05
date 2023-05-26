@@ -365,8 +365,6 @@ class SceneTextDataset(Dataset):
         ignore_tags=[],
         ignore_under_threshold=10,
         drop_under_threshold=1,
-        color_jitter=True,
-        normalize=True,
     ):
         with open(osp.join(root_dir, "ufo/{}.json".format(split)), "r") as f:
             anno = json.load(f)
@@ -376,7 +374,6 @@ class SceneTextDataset(Dataset):
         self.image_dir = osp.join(root_dir, "img", "train")
 
         self.image_size, self.crop_size = image_size, crop_size
-        self.color_jitter, self.normalize = color_jitter, normalize
 
         self.ignore_tags = ignore_tags
 
@@ -425,12 +422,15 @@ class SceneTextDataset(Dataset):
             image = image.convert("RGB")
         image = np.array(image)
 
-        funcs = []
-        if self.color_jitter:
-            funcs.append(A.ColorJitter(0.5, 0.5, 0.5, 0.25))
-        if self.normalize:
-            funcs.append(A.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)))
-        transform = A.Compose(funcs)
+        transform = A.Compose([
+            A.ToGray(True),  # 흑백 처리
+            A.RandomBrightnessContrast(brightness_limit=(0.0,0.0), contrast_limit=(0.1,0.1), brightness_by_max=True, always_apply=True),  # 흑백 대비 강조
+            A.Rotate(limit=[-1,1], p=1.0),  # 1도 회전
+            A.OneOf([
+                A.Blur(blur_limit=(0, 3), always_apply=True),  # blur
+                A.MotionBlur(blur_limit=(3, 5), always_apply=True),  # motion blur
+            ], p=0.5),  # blur 또는 motion blur 중 하나를 선택하여 적용
+        ])
 
         image = transform(image=image)["image"]
         word_bboxes = np.reshape(vertices, (-1, 4, 2))

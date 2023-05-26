@@ -17,6 +17,8 @@ from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from inference import do_inference_for_val
+
 
 def seed_everything(seed):
     random.seed(seed)
@@ -113,18 +115,19 @@ def do_training(
     )
 
     if valid:
-        valid_dataset = SceneTextDataset(
-            data_dir,
-            split="val_fold2",
-            image_size=image_size,
-            crop_size=input_size,
-            ignore_tags=ignore_tags,
-        )
-        valid_dataset = EASTDataset(valid_dataset)
-        valid_loader = DataLoader(
-            valid_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
-        )
-        valid_num_batches = math.ceil(len(valid_dataset) / batch_size)
+        # valid_dataset = SceneTextDataset(
+        #     data_dir,
+        #     split="val_fold2",
+        #     image_size=image_size,
+        #     crop_size=input_size,
+        #     ignore_tags=ignore_tags,
+        # )
+        # valid_dataset = EASTDataset(valid_dataset)
+        # valid_loader = DataLoader(
+        #     valid_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
+        # )
+        # valid_num_batches = math.ceil(len(valid_dataset) / batch_size)
+        pass
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = EAST()
@@ -177,76 +180,87 @@ def do_training(
                 timedelta(seconds=time.time() - epoch_start),
             )
         )
+        scheduler.step()
 
-        if valid:
-            with torch.no_grad():
-                model.eval()
-                val_epoch_loss, epoch_start = 0, time.time()
-                val_epoch_cls_loss, val_epoch_angle_loss, val_epoch_iou_loss = (
-                    0.0,
-                    0.0,
-                    0.0,
-                )
-                with tqdm(total=valid_num_batches) as pbar:
-                    for img, gt_score_map, gt_geo_map, roi_mask in valid_loader:
-                        pbar.set_description("[Epoch {}]".format(epoch + 1))
-                        loss, extra_info = model.train_step(
-                            img, gt_score_map, gt_geo_map, roi_mask
-                        )
-
-                        loss_val = loss.item()
-                        val_epoch_loss += loss_val
-
-                        val_epoch_cls_loss += extra_info["cls_loss"]
-                        val_epoch_angle_loss += extra_info["angle_loss"]
-                        val_epoch_iou_loss += extra_info["iou_loss"]
-
-                        pbar.update(1)
-                        val_dict = {
-                            "Cls loss": extra_info["cls_loss"],
-                            "Angle loss": extra_info["angle_loss"],
-                            "IoU loss": extra_info["iou_loss"],
-                        }
-                        pbar.set_postfix(val_dict)
-
-                val_epoch_loss /= valid_num_batches
-                val_epoch_cls_loss /= valid_num_batches
-                val_epoch_angle_loss /= valid_num_batches
-                val_epoch_iou_loss /= valid_num_batches
-
-                wandb.log(
+        if valid :
+            mean_recall, mean_precision, mean_f1 = do_inference_for_val(model, input_size)
+            wandb.log(
                     {
-                        "val_epoch_loss": val_epoch_loss,
-                        "val_cls_loss": val_epoch_cls_loss,
-                        "val_angle_loss": val_epoch_angle_loss,
-                        "val_iou_loss": val_epoch_iou_loss,
+                        "Recall": mean_recall,
+                        "Precision": mean_precision,
+                        "f1": mean_f1,
                     }
                 )
-                # 전체 val loss
-                print(
-                    "Mean loss: {:.4f} | Elapsed time: {}".format(
-                        val_epoch_loss, timedelta(seconds=time.time() - epoch_start)
-                    )
-                )
 
-                if val_epoch_loss < best_val_epoch_loss:
-                    best_val_epoch_loss = val_epoch_loss
-                    if not osp.exists(model_dir + "/" + wandb_name):
-                        os.makedirs(model_dir + "/" + wandb_name)
-                    ckpt_fpath = osp.join(
-                        model_dir + "/" + wandb_name, "best_val_loss.pth"
-                    )
-                    torch.save(model.state_dict(), ckpt_fpath)
-                    print(
-                        f"Best val loss at epoch {epoch+1}! Saving the model to {ckpt_fpath}..."
-                    )
-                    count = 0
-                else:  # early stopping 구현 count가 지정한 early stopping 이상이면 학습 조료
-                    count += 1
-                    if count >= early_stopping:
-                        print(f"{early_stopping} 동안 학습 진전이 없어 종료")
-                        break
-        scheduler.step()
+        # if valid:
+        #     with torch.no_grad():
+        #         model.eval()
+        #         val_epoch_loss, epoch_start = 0, time.time()
+        #         val_epoch_cls_loss, val_epoch_angle_loss, val_epoch_iou_loss = (
+        #             0.0,
+        #             0.0,
+        #             0.0,
+        #         )
+        #         with tqdm(total=valid_num_batches) as pbar:
+        #             for img, gt_score_map, gt_geo_map, roi_mask in valid_loader:
+        #                 pbar.set_description("[Epoch {}]".format(epoch + 1))
+        #                 loss, extra_info = model.train_step(
+        #                     img, gt_score_map, gt_geo_map, roi_mask
+        #                 )
+
+        #                 loss_val = loss.item()
+        #                 val_epoch_loss += loss_val
+
+        #                 val_epoch_cls_loss += extra_info["cls_loss"]
+        #                 val_epoch_angle_loss += extra_info["angle_loss"]
+        #                 val_epoch_iou_loss += extra_info["iou_loss"]
+
+        #                 pbar.update(1)
+        #                 val_dict = {
+        #                     "Cls loss": extra_info["cls_loss"],
+        #                     "Angle loss": extra_info["angle_loss"],
+        #                     "IoU loss": extra_info["iou_loss"],
+        #                 }
+        #                 pbar.set_postfix(val_dict)
+
+        #         val_epoch_loss /= valid_num_batches
+        #         val_epoch_cls_loss /= valid_num_batches
+        #         val_epoch_angle_loss /= valid_num_batches
+        #         val_epoch_iou_loss /= valid_num_batches
+
+        #         wandb.log(
+        #             {
+        #                 "val_epoch_loss": val_epoch_loss,
+        #                 "val_cls_loss": val_epoch_cls_loss,
+        #                 "val_angle_loss": val_epoch_angle_loss,
+        #                 "val_iou_loss": val_epoch_iou_loss,
+        #             }
+        #         )
+        #         # 전체 val loss
+        #         print(
+        #             "Mean loss: {:.4f} | Elapsed time: {}".format(
+        #                 val_epoch_loss, timedelta(seconds=time.time() - epoch_start)
+        #             )
+        #         )
+
+        #         if val_epoch_loss < best_val_epoch_loss:
+        #             best_val_epoch_loss = val_epoch_loss
+        #             if not osp.exists(model_dir + "/" + wandb_name):
+        #                 os.makedirs(model_dir + "/" + wandb_name)
+        #             ckpt_fpath = osp.join(
+        #                 model_dir + "/" + wandb_name, "best_val_loss.pth"
+        #             )
+        #             torch.save(model.state_dict(), ckpt_fpath)
+        #             print(
+        #                 f"Best val loss at epoch {epoch+1}! Saving the model to {ckpt_fpath}..."
+        #             )
+        #             count = 0
+        #         else:  # early stopping 구현 count가 지정한 early stopping 이상이면 학습 조료
+        #             count += 1
+        #             if count >= early_stopping:
+        #                 print(f"{early_stopping} 동안 학습 진전이 없어 종료")
+        #                 break
+        
 
         # if (epoch + 1) % save_interval == 0:
         #     if not osp.exists(model_dir):
