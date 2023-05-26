@@ -125,6 +125,7 @@ def do_training(data_dir, model_dir, device, image_size, input_size, num_workers
                         "cls_loss": extra_info["cls_loss"],
                         "angle_loss": extra_info["angle_loss"],
                         "iou_loss": extra_info["iou_loss"],
+                        "lr":scheduler.optimizer.param_groups[0]['lr'],
                     }
                 )
         scheduler.step()
