@@ -121,6 +121,7 @@ def do_training(
             ignore_tags=ignore_tags,
         )
         valid_dataset = EASTDataset(valid_dataset)
+
         valid_loader = DataLoader(
             valid_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers
         )
